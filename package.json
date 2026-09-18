@@ -1,0 +1,6 @@
+{
+  "name": "pinta-tcg-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor ponte para sincronizar a coleção Pinta TCG com bases de cartas oficiais (Pokémon TCG API, Scryfall)."
+}
