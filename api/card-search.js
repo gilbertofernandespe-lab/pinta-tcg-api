@@ -22,20 +22,29 @@ export default async function handler(req, res) {
 
   try {
     if (jogo.includes('pok')) {
-      const url = `https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(name)}"&pageSize=10`;
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`Pokémon TCG API respondeu ${r.status}`);
-      const data = await r.json();
+      // pokemontcg.io foi descontinuada; TCGdex é gratuita, sem chave e já
+      // devolve nomes em português quando disponíveis.
+      const buscar = async (lang) => {
+        const url = `https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(name)}`;
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`TCGdex respondeu ${r.status}`);
+        return r.json();
+      };
 
-      const results = (data.data || []).map((c) => ({
+      let data = await buscar('pt');
+      if (!Array.isArray(data) || data.length === 0) {
+        data = await buscar('en'); // nem toda carta tem tradução ainda
+      }
+
+      const results = (Array.isArray(data) ? data : []).slice(0, 10).map((c) => ({
         name: c.name,
-        set: c.set?.name,
-        number: c.number && c.set?.printedTotal ? `${c.number}/${c.set.printedTotal}` : c.number,
-        image: c.images?.small,
-        rarity: c.rarity,
+        set: c.id ? c.id.split('-')[0] : '',
+        number: c.localId,
+        image: c.image ? `${c.image}/high.webp` : null,
+        rarity: null,
       }));
 
-      res.status(200).json({ source: 'pokemontcg.io', results });
+      res.status(200).json({ source: 'tcgdex', results });
       return;
     }
 
