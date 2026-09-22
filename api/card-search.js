@@ -38,13 +38,16 @@ export default async function handler(req, res) {
       // devolve nomes em português quando disponíveis.
       //
       // Também aceita o "código da carta" (ex.: 238/217, ou só 238) em vez
-      // do nome — o número antes da barra é o localId na TCGdex. Se vier
-      // nome + código juntos ("mimikyu 238/217"), busca pelos dois ao
-      // mesmo tempo pra precisar mais o resultado.
+      // do nome — o número antes da barra é o localId na TCGdex. O número
+      // depois da barra não é a "quantidade": é o total oficial de cartas
+      // daquela coleção, que serve como identificador dela (cada coleção
+      // tem o seu total). Se vier nome + código juntos ("mimikyu 238/217"),
+      // busca pelos dois ao mesmo tempo pra precisar mais o resultado.
       const termo = name.trim();
-      const comBarra = termo.match(/(\d+)\s*\/\s*\d+/);
+      const comBarra = termo.match(/(\d+)\s*\/\s*(\d+)/);
       const soNumero = !comBarra && termo.match(/^#?(\d+)$/);
       const localId = comBarra ? comBarra[1] : (soNumero ? soNumero[1] : null);
+      const totalColecao = comBarra ? comBarra[2] : null;
       const textoNome = comBarra ? termo.replace(comBarra[0], '').trim()
                         : (soNumero ? '' : termo);
 
@@ -69,6 +72,27 @@ export default async function handler(req, res) {
       let data = await buscar('pt');
       if (data.length === 0) {
         data = await buscar('en'); // nem toda carta tem tradução ainda
+      }
+
+      // Mesmo número aparece em várias coleções — usa o total (217) pra
+      // achar exatamente a coleção certa entre os candidatos.
+      if (totalColecao && data.length > 1) {
+        try {
+          const r = await fetch('https://api.tcgdex.net/v2/en/sets');
+          const sets = r.ok ? await r.json() : [];
+          const idsDaColecao = new Set(
+            (Array.isArray(sets) ? sets : [])
+              .filter((s) => String(s.cardCount?.official) === totalColecao ||
+                             String(s.cardCount?.total) === totalColecao)
+              .map((s) => s.id)
+          );
+          if (idsDaColecao.size) {
+            const filtrados = data.filter((c) => idsDaColecao.has(c.id ? c.id.split('-')[0] : ''));
+            if (filtrados.length) data = filtrados;
+          }
+        } catch {
+          // se a lista de coleções falhar, segue com os candidatos por número
+        }
       }
 
       const results = data.slice(0, 10).map((c) => ({
