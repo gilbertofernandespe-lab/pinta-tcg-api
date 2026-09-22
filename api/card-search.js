@@ -11,6 +11,18 @@
 //   GET https://SEU-PROJETO.vercel.app/api/card-search?game=magic&name=Lightning+Bolt
 
 export default async function handler(req, res) {
+  // Libera o acesso pro navegador (site da coleção roda em outro
+  // endereço — ou até como arquivo local — então sem isso o navegador
+  // bloqueia a resposta e o fetch() do site falha com "Failed to fetch").
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
   const { name, game } = req.query;
 
   if (!name || !name.trim()) {
