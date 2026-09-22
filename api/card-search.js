@@ -36,12 +36,27 @@ export default async function handler(req, res) {
     if (jogo.includes('pok')) {
       // pokemontcg.io foi descontinuada; TCGdex é gratuita, sem chave e já
       // devolve nomes em português quando disponíveis.
+      //
+      // Também aceita o "código da carta" (ex.: 238/217, ou só 238) em vez
+      // do nome — o número antes da barra é o localId na TCGdex. Se vier
+      // nome + código juntos ("mimikyu 238/217"), busca pelos dois ao
+      // mesmo tempo pra precisar mais o resultado.
+      const termo = name.trim();
+      const comBarra = termo.match(/(\d+)\s*\/\s*\d+/);
+      const soNumero = !comBarra && termo.match(/^#?(\d+)$/);
+      const localId = comBarra ? comBarra[1] : (soNumero ? soNumero[1] : null);
+      const textoNome = comBarra ? termo.replace(comBarra[0], '').trim()
+                        : (soNumero ? '' : termo);
+
       // Se um idioma não tiver a carta (ou a TCGdex tropeçar nesse idioma),
       // tratamos como "sem resultado" nesse idioma em vez de derrubar a
       // busca inteira — só falha de verdade (502) se a rede realmente cair.
       const buscar = async (lang) => {
         try {
-          const url = `https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(name)}`;
+          const params = new URLSearchParams();
+          if (textoNome) params.set('name', textoNome);
+          if (localId) params.set('localId', `eq:${localId}`);
+          const url = `https://api.tcgdex.net/v2/${lang}/cards?${params.toString()}`;
           const r = await fetch(url);
           if (!r.ok) return [];
           const json = await r.json();
