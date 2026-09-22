@@ -51,47 +51,65 @@ export default async function handler(req, res) {
       const textoNome = comBarra ? termo.replace(comBarra[0], '').trim()
                         : (soNumero ? '' : termo);
 
-      // Se um idioma não tiver a carta (ou a TCGdex tropeçar nesse idioma),
-      // tratamos como "sem resultado" nesse idioma em vez de derrubar a
-      // busca inteira — só falha de verdade (502) se a rede realmente cair.
-      const buscar = async (lang) => {
-        try {
-          const params = new URLSearchParams();
-          if (textoNome) params.set('name', textoNome);
-          if (localId) params.set('localId', `eq:${localId}`);
-          const url = `https://api.tcgdex.net/v2/${lang}/cards?${params.toString()}`;
-          const r = await fetch(url);
-          if (!r.ok) return [];
-          const json = await r.json();
-          return Array.isArray(json) ? json : [];
-        } catch {
-          return [];
-        }
-      };
+      let data = [];
 
-      let data = await buscar('pt');
-      if (data.length === 0) {
-        data = await buscar('en'); // nem toda carta tem tradução ainda
-      }
-
-      // Mesmo número aparece em várias coleções — usa o total (217) pra
-      // achar exatamente a coleção certa entre os candidatos.
-      if (totalColecao && data.length > 1) {
+      // Código completo (número + total, ex.: 238/217): o total identifica
+      // a coleção, então achamos ela primeiro e buscamos a carta dentro
+      // dela — mais direto e confiável do que filtrar a lista geral de
+      // cartas por número (o filtro localId da TCGdex é instável).
+      if (localId && totalColecao) {
         try {
-          const r = await fetch('https://api.tcgdex.net/v2/en/sets');
-          const sets = r.ok ? await r.json() : [];
-          const idsDaColecao = new Set(
-            (Array.isArray(sets) ? sets : [])
-              .filter((s) => String(s.cardCount?.official) === totalColecao ||
-                             String(s.cardCount?.total) === totalColecao)
-              .map((s) => s.id)
+          const rs = await fetch('https://api.tcgdex.net/v2/en/sets');
+          const sets = rs.ok ? await rs.json() : [];
+          const colecoes = (Array.isArray(sets) ? sets : []).filter(
+            (s) => String(s.cardCount?.official) === totalColecao ||
+                   String(s.cardCount?.total) === totalColecao
           );
-          if (idsDaColecao.size) {
-            const filtrados = data.filter((c) => idsDaColecao.has(c.id ? c.id.split('-')[0] : ''));
-            if (filtrados.length) data = filtrados;
+
+          for (const colecao of colecoes) {
+            for (const lang of ['pt', 'en']) {
+              try {
+                const rd = await fetch(`https://api.tcgdex.net/v2/${lang}/sets/${colecao.id}`);
+                if (!rd.ok) continue;
+                const detalhe = await rd.json();
+                const carta = (detalhe.cards || []).find((c) => String(c.localId) === localId);
+                if (carta) {
+                  data.push({ ...carta, id: carta.id || `${colecao.id}-${carta.localId}` });
+                  break; // achou nesse idioma, não precisa tentar o outro
+                }
+              } catch {
+                // tenta o próximo idioma/coleção
+              }
+            }
           }
         } catch {
-          // se a lista de coleções falhar, segue com os candidatos por número
+          // segue pro plano B abaixo
+        }
+      }
+
+      // Nome (com ou sem número solto), ou plano B se o código não achou
+      // nada acima. Se um idioma não tiver a carta (ou a TCGdex tropeçar
+      // nesse idioma), tratamos como "sem resultado" nesse idioma em vez
+      // de derrubar a busca inteira.
+      if (data.length === 0 && (textoNome || localId)) {
+        const buscar = async (lang) => {
+          try {
+            const params = new URLSearchParams();
+            if (textoNome) params.set('name', textoNome);
+            if (localId) params.set('localId', `eq:${localId}`);
+            const url = `https://api.tcgdex.net/v2/${lang}/cards?${params.toString()}`;
+            const r = await fetch(url);
+            if (!r.ok) return [];
+            const json = await r.json();
+            return Array.isArray(json) ? json : [];
+          } catch {
+            return [];
+          }
+        };
+
+        data = await buscar('pt');
+        if (data.length === 0) {
+          data = await buscar('en'); // nem toda carta tem tradução ainda
         }
       }
 
