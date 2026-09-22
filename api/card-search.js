@@ -36,19 +36,27 @@ export default async function handler(req, res) {
     if (jogo.includes('pok')) {
       // pokemontcg.io foi descontinuada; TCGdex é gratuita, sem chave e já
       // devolve nomes em português quando disponíveis.
+      // Se um idioma não tiver a carta (ou a TCGdex tropeçar nesse idioma),
+      // tratamos como "sem resultado" nesse idioma em vez de derrubar a
+      // busca inteira — só falha de verdade (502) se a rede realmente cair.
       const buscar = async (lang) => {
-        const url = `https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(name)}`;
-        const r = await fetch(url);
-        if (!r.ok) throw new Error(`TCGdex respondeu ${r.status}`);
-        return r.json();
+        try {
+          const url = `https://api.tcgdex.net/v2/${lang}/cards?name=${encodeURIComponent(name)}`;
+          const r = await fetch(url);
+          if (!r.ok) return [];
+          const json = await r.json();
+          return Array.isArray(json) ? json : [];
+        } catch {
+          return [];
+        }
       };
 
       let data = await buscar('pt');
-      if (!Array.isArray(data) || data.length === 0) {
+      if (data.length === 0) {
         data = await buscar('en'); // nem toda carta tem tradução ainda
       }
 
-      const results = (Array.isArray(data) ? data : []).slice(0, 10).map((c) => ({
+      const results = data.slice(0, 10).map((c) => ({
         name: c.name,
         set: c.id ? c.id.split('-')[0] : '',
         number: c.localId,
