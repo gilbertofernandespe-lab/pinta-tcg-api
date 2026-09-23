@@ -53,17 +53,65 @@ export default async function handler(req, res) {
 
       let data = [];
 
+      // Lista de coleções (uma vez só): serve pra achar a coleção pelo
+      // total (238/217) e pra montar o número no padrão 000/000 em
+      // todos os resultados.
+      const listaSets = async (lang) => {
+        try {
+          const r = await fetch(`https://api.tcgdex.net/v2/${lang}/sets`);
+          const j = r.ok ? await r.json() : [];
+          return Array.isArray(j) ? j : [];
+        } catch {
+          return [];
+        }
+      };
+      const [setsEn, setsPt] = await Promise.all([listaSets('en'), listaSets('pt')]);
+      const infoSet = {};
+      for (const s of setsEn) infoSet[s.id] = { nome: s.name, total: s.cardCount?.official };
+      for (const s of setsPt) {
+        infoSet[s.id] = { ...(infoSet[s.id] || {}), nome: s.name };
+        if (!infoSet[s.id].total) infoSet[s.id].total = s.cardCount?.official;
+      }
+
+      // Mesmo número escrito de jeitos diferentes (25 = 025) conta como igual
+      const mesmoNumero = (a, b) =>
+        /^\d+$/.test(String(a)) && /^\d+$/.test(String(b))
+          ? Number(a) === Number(b)
+          : String(a).toLowerCase() === String(b).toLowerCase();
+
       // Código completo (número + total, ex.: 238/217): o total identifica
       // a coleção, então achamos ela primeiro e buscamos a carta dentro
       // dela — mais direto e confiável do que filtrar a lista geral de
       // cartas por número (o filtro localId da TCGdex é instável).
-      if (localId && totalColecao) {
+      // Coleção já conhecida (?set=me02.5&name=238): usado pelo site pra
+      // completar o número de cartas antigas salvas só com "238".
+      const setParam = String(req.query.set || '').trim();
+      if (setParam && localId) {
+        for (const lang of ['pt', 'en']) {
+          try {
+            const rd = await fetch(`https://api.tcgdex.net/v2/${lang}/sets/${encodeURIComponent(setParam)}`);
+            if (!rd.ok) continue;
+            const detalhe = await rd.json();
+            const carta = (detalhe.cards || []).find((c) => mesmoNumero(c.localId, localId));
+            if (carta) {
+              if (!infoSet[setParam]?.total && detalhe.cardCount?.official) {
+                infoSet[setParam] = { ...(infoSet[setParam] || {}), total: detalhe.cardCount.official };
+              }
+              data.push({ ...carta, id: carta.id || `${setParam}-${carta.localId}`, _setId: setParam });
+              break;
+            }
+          } catch {
+            // tenta o outro idioma
+          }
+        }
+      }
+
+      if (data.length === 0 && localId && totalColecao) {
         try {
-          const rs = await fetch('https://api.tcgdex.net/v2/en/sets');
-          const sets = rs.ok ? await rs.json() : [];
-          const colecoes = (Array.isArray(sets) ? sets : []).filter(
-            (s) => String(s.cardCount?.official) === totalColecao ||
-                   String(s.cardCount?.total) === totalColecao
+          const sets = setsEn;
+          const colecoes = sets.filter(
+            (s) => mesmoNumero(s.cardCount?.official ?? '', totalColecao) ||
+                   mesmoNumero(s.cardCount?.total ?? '', totalColecao)
           );
 
           for (const colecao of colecoes) {
@@ -72,9 +120,9 @@ export default async function handler(req, res) {
                 const rd = await fetch(`https://api.tcgdex.net/v2/${lang}/sets/${colecao.id}`);
                 if (!rd.ok) continue;
                 const detalhe = await rd.json();
-                const carta = (detalhe.cards || []).find((c) => String(c.localId) === localId);
+                const carta = (detalhe.cards || []).find((c) => mesmoNumero(c.localId, localId));
                 if (carta) {
-                  data.push({ ...carta, id: carta.id || `${colecao.id}-${carta.localId}` });
+                  data.push({ ...carta, id: carta.id || `${colecao.id}-${carta.localId}`, _setId: colecao.id });
                   break; // achou nesse idioma, não precisa tentar o outro
                 }
               } catch {
@@ -113,13 +161,36 @@ export default async function handler(req, res) {
         }
       }
 
-      const results = data.slice(0, 10).map((c) => ({
-        name: c.name,
-        set: c.id ? c.id.split('-')[0] : '',
-        number: c.localId,
-        image: c.image ? `${c.image}/high.webp` : null,
-        rarity: null,
-      }));
+      // Id da coleção a partir do id da carta ("me02.5-238" → "me02.5")
+      const setDaCarta = (c) => {
+        if (c._setId) return c._setId;
+        const id = String(c.id || '');
+        const suf = '-' + c.localId;
+        if (c.localId != null && id.endsWith(suf)) return id.slice(0, -suf.length);
+        return id.includes('-') ? id.slice(0, id.lastIndexOf('-')) : id;
+      };
+
+      // Número no padrão impresso na carta: 000/000 (ex.: 025/165, 238/217)
+      const numeroPadrao = (localId, total) => {
+        const n = String(localId ?? '').trim();
+        if (!n) return '';
+        if (/^\d+$/.test(n) && Number(total) > 0) {
+          return n.padStart(3, '0') + '/' + String(total).padStart(3, '0');
+        }
+        return /^\d+$/.test(n) ? n.padStart(3, '0') : n; // promos/TG etc. ficam como estão
+      };
+
+      const results = data.slice(0, 10).map((c) => {
+        const setId = setDaCarta(c);
+        const info = infoSet[setId] || {};
+        return {
+          name: c.name,
+          set: info.nome || setId,
+          number: numeroPadrao(c.localId, info.total),
+          image: c.image ? `${c.image}/high.webp` : null,
+          rarity: null,
+        };
+      });
 
       res.status(200).json({ source: 'tcgdex', results });
       return;
