@@ -10,6 +10,128 @@
 //   GET https://SEU-PROJETO.vercel.app/api/card-search?game=pokemon&name=Pikachu
 //   GET https://SEU-PROJETO.vercel.app/api/card-search?game=magic&name=Lightning+Bolt
 
+// ---------------------------------------------------------------------
+// Coleções (sets) de Pokémon TCG — lista completa e cartas de cada uma
+// ---------------------------------------------------------------------
+const TCGDEX = 'https://api.tcgdex.net/v2';
+
+async function pegarJSON(url) {
+  try {
+    const r = await fetch(url);
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Número no padrão impresso na carta: 000/000
+function numeroPadraoCarta(localId, total) {
+  const n = String(localId ?? '').trim();
+  if (!n) return '';
+  if (/^\d+$/.test(n) && Number(total) > 0) {
+    return n.padStart(3, '0') + '/' + String(total).padStart(3, '0');
+  }
+  return /^\d+$/.test(n) ? n.padStart(3, '0') : n;
+}
+
+// ?acao=colecoes → todas as coleções, agrupadas por série, da mais nova
+// para a mais antiga (sem as do Pokémon TCG Pocket, que é só digital)
+async function listarColecoes() {
+  const [setsEn, setsPt, seriesEn, seriesPt] = await Promise.all([
+    pegarJSON(`${TCGDEX}/en/sets`), pegarJSON(`${TCGDEX}/pt/sets`),
+    pegarJSON(`${TCGDEX}/en/series`), pegarJSON(`${TCGDEX}/pt/series`),
+  ]);
+  const listaSets = Array.isArray(setsEn) ? setsEn : [];
+  const listaSeries = Array.isArray(seriesEn) ? seriesEn : [];
+  const nomePt = {};
+  (Array.isArray(setsPt) ? setsPt : []).forEach((s) => { nomePt[s.id] = s.name; });
+  const seriePt = {};
+  (Array.isArray(seriesPt) ? seriesPt : []).forEach((s) => { seriePt[s.id] = s.name; });
+
+  // detalhes de cada série: diz exatamente quais coleções são dela
+  const detalhes = await Promise.all(listaSeries.map((s) => pegarJSON(`${TCGDEX}/en/series/${encodeURIComponent(s.id)}`)));
+  const serieDoSet = {};
+  const ordemNaSerie = {};
+  detalhes.forEach((d, i) => {
+    if (!d || !Array.isArray(d.sets)) return;
+    d.sets.forEach((st, j) => { serieDoSet[st.id] = listaSeries[i].id; ordemNaSerie[st.id] = j; });
+  });
+  // plano B: pelo começo do código (sv01 → sv, swsh3 → swsh…)
+  const idsSeries = listaSeries.map((s) => s.id).sort((a, b) => b.length - a.length);
+  const serieDe = (setId) => serieDoSet[setId] ||
+    idsSeries.find((sid) => String(setId).toLowerCase().startsWith(String(sid).toLowerCase())) || 'outras';
+
+  // ordem das séries: pela data, se todas tiverem; senão, pela ordem da lista
+  const datas = detalhes.map((d) => (d && d.releaseDate ? Date.parse(d.releaseDate) : NaN));
+  const usarDatas = datas.length && datas.every((t) => !Number.isNaN(t));
+  const posSerie = {};
+  listaSeries.forEach((s, i) => { posSerie[s.id] = usarDatas ? datas[i] : i; });
+
+  const colecoes = listaSets
+    .map((s, i) => ({ s, i, serie: serieDe(s.id) }))
+    .filter(({ serie }) => serie !== 'tcgp')
+    .sort((a, b) =>
+      ((posSerie[b.serie] ?? -1) - (posSerie[a.serie] ?? -1)) ||
+      ((ordemNaSerie[b.s.id] ?? b.i) - (ordemNaSerie[a.s.id] ?? a.i)))
+    .map(({ s, serie }) => ({
+      id: s.id,
+      nome: nomePt[s.id] || s.name,
+      nome_en: s.name,
+      serie,
+      oficial: (s.cardCount && s.cardCount.official) || null,
+      total: (s.cardCount && s.cardCount.total) || null,
+      logo: s.logo ? `${s.logo}.webp` : null,
+      simbolo: s.symbol ? `${s.symbol}.webp` : null,
+    }));
+
+  const usadas = new Set(colecoes.map((c) => c.serie));
+  const series = listaSeries
+    .filter((s) => usadas.has(s.id))
+    .sort((a, b) => (posSerie[b.id] ?? 0) - (posSerie[a.id] ?? 0))
+    .map((s) => ({ id: s.id, nome: seriePt[s.id] || s.name }));
+  if (usadas.has('outras')) series.push({ id: 'outras', nome: 'Outras' });
+
+  return { colecoes, series };
+}
+
+// ?acao=cartas&set=<id> → todas as cartas da coleção (nome em português
+// quando existir, número 000/000 e imagem)
+async function listarCartasDaColecao(setId) {
+  const [pt, en] = await Promise.all([
+    pegarJSON(`${TCGDEX}/pt/sets/${encodeURIComponent(setId)}`),
+    pegarJSON(`${TCGDEX}/en/sets/${encodeURIComponent(setId)}`),
+  ]);
+  const base = en || pt;
+  if (!base) return null;
+  const oficial = (base.cardCount && base.cardCount.official) || (pt && pt.cardCount && pt.cardCount.official) || null;
+  const ptPorId = {};
+  ((pt && pt.cards) || []).forEach((c) => { ptPorId[c.localId] = c; });
+  const vistos = new Set();
+  const cartas = [];
+  [...((en && en.cards) || []), ...((pt && pt.cards) || [])].forEach((c) => {
+    if (vistos.has(c.localId)) return;
+    vistos.add(c.localId);
+    const p = ptPorId[c.localId];
+    const img = (p && p.image) || c.image || null;
+    cartas.push({
+      name: (p && p.name) || c.name,
+      localId: c.localId,
+      number: numeroPadraoCarta(c.localId, oficial),
+      thumb: img ? `${img}/low.webp` : null,
+      image: img ? `${img}/high.webp` : null,
+    });
+  });
+  return {
+    colecao: {
+      id: setId,
+      nome: (pt && pt.name) || (en && en.name) || setId,
+      oficial,
+      logo: base.logo ? `${base.logo}.webp` : null,
+    },
+    cartas,
+  };
+}
+
 export default async function handler(req, res) {
   // Libera o acesso pro navegador (site da coleção roda em outro
   // endereço — ou até como arquivo local — então sem isso o navegador
@@ -23,7 +145,25 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { name, game } = req.query;
+  const { name, game, acao } = req.query;
+
+  // Lista de coleções e cartas de uma coleção (guardadas 1 dia em cache)
+  if (acao === 'colecoes') {
+    const dados = await listarColecoes();
+    if (!dados.colecoes.length) { res.status(502).json({ error: 'Não deu para carregar as coleções agora.' }); return; }
+    res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+    res.status(200).json(dados);
+    return;
+  }
+  if (acao === 'cartas') {
+    const setId = String(req.query.set || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,40}$/.test(setId)) { res.status(400).json({ error: 'Coleção inválida.' }); return; }
+    const dados = await listarCartasDaColecao(setId);
+    if (!dados) { res.status(404).json({ error: 'Coleção não encontrada.' }); return; }
+    res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+    res.status(200).json(dados);
+    return;
+  }
 
   if (!name || !name.trim()) {
     res.status(400).json({ error: 'Parâmetro "name" é obrigatório.' });
@@ -186,6 +326,7 @@ export default async function handler(req, res) {
         return {
           name: c.name,
           set: info.nome || setId,
+          set_id: setId || null,
           number: numeroPadrao(c.localId, info.total),
           image: c.image ? `${c.image}/high.webp` : null,
           rarity: null,
