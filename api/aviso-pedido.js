@@ -13,6 +13,11 @@ const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' 
 const esc = (t) => String(t == null ? '' : t)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+const VARIACOES = {
+  normal: 'Normal', reverse: 'Reverse Holo', holo: 'Holo', pokeball: 'Reverse Pokébola',
+  masterball: 'Reverse Master Ball', primeira: '1ª Edição', carimbada: 'Carimbada', outra: 'Outra variação',
+};
+
 function numeroCarta(n) {
   const m = String(n || '').match(/^(\d+)\s*\/\s*(\d+)$/);
   return m ? m[1].padStart(3, '0') + '/' + m[2].padStart(3, '0') : String(n || '');
@@ -46,7 +51,8 @@ export default async function handler(req, res) {
   const linhasItens = itens.map((i) =>
     `<tr><td style="padding:4px 0">${esc(i.qty)}× <b>${esc(i.name)}</b>` +
     `${i.number ? ' <span style="color:#6E6454">(' + esc(numeroCarta(i.number)) + ')</span>' : ''}` +
-    `${i.condition ? '<br><span style="color:#6E6454;font-size:13px">' + esc(i.condition) + (i.language ? ' · ' + esc(i.language) : '') + '</span>' : ''}</td>` +
+    `${(i.variant || i.condition || i.language) ? '<br><span style="color:#6E6454;font-size:13px">' +
+      [VARIACOES[i.variant] || i.variant, i.condition, i.language].filter(Boolean).map(esc).join(' · ') + '</span>' : ''}</td>` +
     `<td style="padding:4px 0;text-align:right;white-space:nowrap">${BRL.format((Number(i.price) || 0) * (Number(i.qty) || 1))}</td></tr>`
   ).join('');
 

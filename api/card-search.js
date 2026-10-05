@@ -165,6 +165,17 @@ export default async function handler(req, res) {
     return;
   }
 
+  // ?acao=carta&id=<coleção>-<número>  → raridade e variações que existem
+  if (acao === 'carta') {
+    const id = String(req.query.id || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,60}$/.test(id)) { res.status(400).json({ error: 'Carta inválida.' }); return; }
+    const c = await pegarJSON(`${TCGDEX}/en/cards/${encodeURIComponent(id)}`);
+    if (!c) { res.status(404).json({ error: 'Carta não encontrada.' }); return; }
+    res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+    res.status(200).json({ id, raridade: c.rarity || null, variantes: c.variants || null });
+    return;
+  }
+
   if (!name || !name.trim()) {
     res.status(400).json({ error: 'Parâmetro "name" é obrigatório.' });
     return;
@@ -327,6 +338,7 @@ export default async function handler(req, res) {
           name: c.name,
           set: info.nome || setId,
           set_id: setId || null,
+          card_id: c.id || (setId && c.localId != null ? `${setId}-${c.localId}` : null),
           number: numeroPadrao(c.localId, info.total),
           image: c.image ? `${c.image}/high.webp` : null,
           rarity: null,
