@@ -64,12 +64,24 @@ export default async function handler(req, res) {
 
   const site = String(process.env.SITE_URL || '').replace(/\/+$/, '');
 
+  // O mesmo aviso serve para: pedido novo, cliente aceitou a alteração
+  // e cliente cancelou o pedido (o banco chama aqui nos três casos).
+  const num = p.numero ? ' Nº ' + p.numero : '';
+  const tipo = p.status === 'aceito' ? 'aceito' : p.status === 'cancelado' ? 'cancelado' : 'novo';
+  const titulo = tipo === 'aceito' ? '✅ Cliente aceitou a alteração do pedido' + num
+    : tipo === 'cancelado' ? '❌ Cliente cancelou o pedido' + num
+    : '🃏 Novo pedido' + num + ' na loja Pinta TCG';
+  const explica = tipo === 'aceito' ? 'O cliente confirmou o pedido ajustado. Agora é só confirmar e separar as cartas na área de Pedidos.'
+    : tipo === 'cancelado' ? 'O cliente cancelou este pedido. O estoque não foi mexido.'
+    : 'Confira o estoque das cartas e confirme (ou altere) o pedido na área de Pedidos.';
+
   const html = `
   <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:auto;color:#1E1A13">
     <div style="background:#1E1A13;color:#FFB627;padding:14px 18px;border-radius:12px 12px 0 0;font-size:18px;font-weight:bold">
-      🃏 Novo pedido na loja Pinta TCG
+      ${esc(titulo)}
     </div>
     <div style="border:1px solid #e5dfd3;border-top:0;border-radius:0 0 12px 12px;padding:18px">
+      <p style="margin:0 0 10px;color:#4A4236;font-size:14px">${esc(explica)}</p>
       <p style="margin:0 0 4px;font-size:17px"><b>${esc(p.buyer_name)}</b></p>
       <p style="margin:0;color:#4A4236">WhatsApp: ${esc(p.buyer_contact)}${p.pix_ref ? ' · Pix ref.: <b>' + esc(p.pix_ref) + '</b>' : ''}</p>
       ${p.buyer_note ? `<p style="margin:10px 0 0;font-style:italic;color:#4A4236">“${esc(p.buyer_note)}”</p>` : ''}
@@ -93,7 +105,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         from: process.env.AVISO_REMETENTE || 'Pinta TCG <onboarding@resend.dev>',
         to: [process.env.AVISO_EMAIL],
-        subject: `🃏 Novo pedido: ${p.buyer_name || 'comprador'} — ${BRL.format(total)}`,
+        subject: `${titulo}: ${p.buyer_name || 'comprador'} — ${BRL.format(total)}`,
         html,
       }),
     });
