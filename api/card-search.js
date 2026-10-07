@@ -297,9 +297,14 @@ export default async function handler(req, res) {
           return [];
         }
       };
-      const [setsEn, setsPt, setsJaTodos] = await Promise.all([listaSets('en'), listaSets('pt'), listaSets('ja')]);
+      const [setsEnTodos, setsPt, setsJaTodos, pocket] = await Promise.all([
+        listaSets('en'), listaSets('pt'), listaSets('ja'), pegarJSON(`${TCGDEX}/en/series/tcgp`),
+      ]);
+      // Pokémon TCG Pocket é só digital (não existe carta física): fica fora da busca
+      const idsPocket = new Set(((pocket && pocket.sets) || []).map((s) => s.id));
+      const setsEn = setsEnTodos.filter((s) => !idsPocket.has(s.id));
       // coleções japonesas = as que não existem na lista internacional
-      const idsEn = new Set(setsEn.map((s) => s.id));
+      const idsEn = new Set(setsEnTodos.map((s) => s.id));
       const setsJa = setsJaTodos.filter((s) => s && s.id && !idsEn.has(s.id));
       const infoSet = {};
       for (const s of setsJa) infoSet[s.id] = { nome: s.name, total: s.cardCount?.official, lang: 'ja' };
@@ -418,7 +423,7 @@ export default async function handler(req, res) {
         return /^\d+$/.test(n) ? n.padStart(3, '0') : n; // promos/TG etc. ficam como estão
       };
 
-      const results = data.slice(0, 10).map((c) => {
+      const results = data.filter((c) => !idsPocket.has(setDaCarta(c))).slice(0, 10).map((c) => {
         const setId = setDaCarta(c);
         const info = infoSet[setId] || {};
         return {
