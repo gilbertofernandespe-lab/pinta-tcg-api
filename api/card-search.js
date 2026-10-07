@@ -34,8 +34,63 @@ function numeroPadraoCarta(localId, total) {
   return /^\d+$/.test(n) ? n.padStart(3, '0') : n;
 }
 
+// Limite de tempo: se a parte japonesa demorar, a lista normal não espera
+function comLimite(promessa, ms, reserva) {
+  return Promise.race([promessa, new Promise((ok) => setTimeout(() => ok(reserva), ms))]);
+}
+
+// Coleções JAPONESAS (a TCGdex guarda em /ja, com códigos próprios, ex.:
+// SV2a). Entram na lista com idioma: 'ja' e série "Japonês · …".
+// Coleções que já existem na lista internacional não são repetidas.
+async function listarColecoesJa(idsInternacionais) {
+  const [sets, series] = await Promise.all([
+    pegarJSON(`${TCGDEX}/ja/sets`), pegarJSON(`${TCGDEX}/ja/series`),
+  ]);
+  const listaSets = (Array.isArray(sets) ? sets : []).filter((s) => s && s.id && !idsInternacionais.has(s.id));
+  if (!listaSets.length) return { colecoes: [], series: [] };
+  const listaSeries = Array.isArray(series) ? series : [];
+
+  const detalhes = await Promise.all(listaSeries.map((s) => pegarJSON(`${TCGDEX}/ja/series/${encodeURIComponent(s.id)}`)));
+  const serieDoSet = {};
+  const ordemNaSerie = {};
+  const posSerie = {};
+  detalhes.forEach((d, i) => {
+    const sid = listaSeries[i].id;
+    const t = d && d.releaseDate ? Date.parse(d.releaseDate) : NaN;
+    posSerie[sid] = Number.isNaN(t) ? i : t;
+    if (!d || !Array.isArray(d.sets)) return;
+    d.sets.forEach((st, j) => { serieDoSet[st.id] = sid; ordemNaSerie[st.id] = j; });
+  });
+  const nomeSerie = {};
+  listaSeries.forEach((s) => { nomeSerie[s.id] = s.name; });
+
+  const colecoes = listaSets
+    .map((s, i) => ({ s, i, serie: serieDoSet[s.id] || 'outras' }))
+    .sort((a, b) =>
+      ((posSerie[b.serie] ?? -1) - (posSerie[a.serie] ?? -1)) ||
+      ((ordemNaSerie[b.s.id] ?? b.i) - (ordemNaSerie[a.s.id] ?? a.i)))
+    .map(({ s, serie }) => ({
+      id: s.id,
+      nome: s.name || s.id,
+      nome_en: null,
+      serie: 'ja:' + serie,
+      idioma: 'ja',
+      oficial: (s.cardCount && s.cardCount.official) || null,
+      total: (s.cardCount && s.cardCount.total) || null,
+      logo: s.logo ? `${s.logo}.webp` : null,
+      simbolo: s.symbol ? `${s.symbol}.webp` : null,
+    }));
+
+  const usadas = [...new Set(colecoes.map((c) => c.serie))];
+  const seriesJa = usadas
+    .sort((a, b) => (posSerie[b.slice(3)] ?? -1) - (posSerie[a.slice(3)] ?? -1))
+    .map((id) => ({ id, nome: 'Japonês · ' + (nomeSerie[id.slice(3)] || 'Outras') }));
+  return { colecoes, series: seriesJa };
+}
+
 // ?acao=colecoes → todas as coleções, agrupadas por série, da mais nova
-// para a mais antiga (sem as do Pokémon TCG Pocket, que é só digital)
+// para a mais antiga (sem as do Pokémon TCG Pocket, que é só digital).
+// No fim da lista entram as coleções japonesas.
 async function listarColecoes() {
   const [setsEn, setsPt, seriesEn, seriesPt] = await Promise.all([
     pegarJSON(`${TCGDEX}/en/sets`), pegarJSON(`${TCGDEX}/pt/sets`),
@@ -91,7 +146,15 @@ async function listarColecoes() {
     .map((s) => ({ id: s.id, nome: seriePt[s.id] || s.name }));
   if (usadas.has('outras')) series.push({ id: 'outras', nome: 'Outras' });
 
-  return { colecoes, series };
+  // coleções japonesas (se a busca delas falhar, a lista normal segue igual)
+  let ja = { colecoes: [], series: [] };
+  if (colecoes.length) {
+    try {
+      ja = await comLimite(listarColecoesJa(new Set(listaSets.map((s) => s.id))), 6000, ja);
+    } catch { /* segue sem as japonesas */ }
+  }
+
+  return { colecoes: colecoes.concat(ja.colecoes), series: series.concat(ja.series) };
 }
 
 // ?acao=cartas&set=<id> → todas as cartas da coleção (nome em português
@@ -101,8 +164,8 @@ async function listarCartasDaColecao(setId) {
     pegarJSON(`${TCGDEX}/pt/sets/${encodeURIComponent(setId)}`),
     pegarJSON(`${TCGDEX}/en/sets/${encodeURIComponent(setId)}`),
   ]);
+  if (!en && !pt) return listarCartasDaColecaoJa(setId);
   const base = en || pt;
-  if (!base) return null;
   const oficial = (base.cardCount && base.cardCount.official) || (pt && pt.cardCount && pt.cardCount.official) || null;
   const ptPorId = {};
   ((pt && pt.cards) || []).forEach((c) => { ptPorId[c.localId] = c; });
@@ -129,6 +192,23 @@ async function listarCartasDaColecao(setId) {
       logo: base.logo ? `${base.logo}.webp` : null,
     },
     cartas,
+  };
+}
+
+// Coleção que só existe em japonês
+async function listarCartasDaColecaoJa(setId) {
+  const ja = await pegarJSON(`${TCGDEX}/ja/sets/${encodeURIComponent(setId)}`);
+  if (!ja) return null;
+  const oficial = (ja.cardCount && ja.cardCount.official) || null;
+  return {
+    colecao: { id: setId, nome: ja.name || setId, oficial, idioma: 'ja', logo: ja.logo ? `${ja.logo}.webp` : null },
+    cartas: (ja.cards || []).map((c) => ({
+      name: c.name,
+      localId: c.localId,
+      number: numeroPadraoCarta(c.localId, oficial),
+      thumb: c.image ? `${c.image}/low.webp` : null,
+      image: c.image ? `${c.image}/high.webp` : null,
+    })),
   };
 }
 
@@ -169,7 +249,8 @@ export default async function handler(req, res) {
   if (acao === 'carta') {
     const id = String(req.query.id || '').trim();
     if (!/^[A-Za-z0-9._-]{1,60}$/.test(id)) { res.status(400).json({ error: 'Carta inválida.' }); return; }
-    const c = await pegarJSON(`${TCGDEX}/en/cards/${encodeURIComponent(id)}`);
+    const c = await pegarJSON(`${TCGDEX}/en/cards/${encodeURIComponent(id)}`) ||
+              await pegarJSON(`${TCGDEX}/ja/cards/${encodeURIComponent(id)}`);   // carta japonesa
     if (!c) { res.status(404).json({ error: 'Carta não encontrada.' }); return; }
     res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
     res.status(200).json({ id, raridade: c.rarity || null, variantes: c.variants || null });
@@ -216,8 +297,12 @@ export default async function handler(req, res) {
           return [];
         }
       };
-      const [setsEn, setsPt] = await Promise.all([listaSets('en'), listaSets('pt')]);
+      const [setsEn, setsPt, setsJaTodos] = await Promise.all([listaSets('en'), listaSets('pt'), listaSets('ja')]);
+      // coleções japonesas = as que não existem na lista internacional
+      const idsEn = new Set(setsEn.map((s) => s.id));
+      const setsJa = setsJaTodos.filter((s) => s && s.id && !idsEn.has(s.id));
       const infoSet = {};
+      for (const s of setsJa) infoSet[s.id] = { nome: s.name, total: s.cardCount?.official, lang: 'ja' };
       for (const s of setsEn) infoSet[s.id] = { nome: s.name, total: s.cardCount?.official };
       for (const s of setsPt) {
         infoSet[s.id] = { ...(infoSet[s.id] || {}), nome: s.name };
@@ -238,7 +323,7 @@ export default async function handler(req, res) {
       // completar o número de cartas antigas salvas só com "238".
       const setParam = String(req.query.set || '').trim();
       if (setParam && localId) {
-        for (const lang of ['pt', 'en']) {
+        for (const lang of (infoSet[setParam]?.lang === 'ja' ? ['ja'] : ['pt', 'en', 'ja'])) {
           try {
             const rd = await fetch(`https://api.tcgdex.net/v2/${lang}/sets/${encodeURIComponent(setParam)}`);
             if (!rd.ok) continue;
@@ -259,14 +344,13 @@ export default async function handler(req, res) {
 
       if (data.length === 0 && localId && totalColecao) {
         try {
-          const sets = setsEn;
-          const colecoes = sets.filter(
-            (s) => mesmoNumero(s.cardCount?.official ?? '', totalColecao) ||
-                   mesmoNumero(s.cardCount?.total ?? '', totalColecao)
-          );
+          // internacionais primeiro, depois as japonesas com o mesmo total
+          const bate = (s) => mesmoNumero(s.cardCount?.official ?? '', totalColecao) ||
+                              mesmoNumero(s.cardCount?.total ?? '', totalColecao);
+          const colecoes = setsEn.filter(bate).concat(setsJa.filter(bate)).slice(0, 12);
 
           for (const colecao of colecoes) {
-            for (const lang of ['pt', 'en']) {
+            for (const lang of (infoSet[colecao.id]?.lang === 'ja' ? ['ja'] : ['pt', 'en'])) {
               try {
                 const rd = await fetch(`https://api.tcgdex.net/v2/${lang}/sets/${colecao.id}`);
                 if (!rd.ok) continue;
@@ -310,6 +394,9 @@ export default async function handler(req, res) {
         if (data.length === 0) {
           data = await buscar('en'); // nem toda carta tem tradução ainda
         }
+        if (data.length === 0) {
+          data = await buscar('ja'); // nome digitado em japonês
+        }
       }
 
       // Id da coleção a partir do id da carta ("me02.5-238" → "me02.5")
@@ -342,6 +429,8 @@ export default async function handler(req, res) {
           number: numeroPadrao(c.localId, info.total),
           image: c.image ? `${c.image}/high.webp` : null,
           rarity: null,
+          // 'ja' = carta de coleção japonesa (o site já marca o idioma Japonês)
+          lang: info.lang || (/\/ja\//.test(String(c.image || '')) ? 'ja' : null),
         };
       });
 

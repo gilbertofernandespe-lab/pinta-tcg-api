@@ -65,14 +65,17 @@ export default async function handler(req, res) {
   const site = String(process.env.SITE_URL || '').replace(/\/+$/, '');
 
   // O mesmo aviso serve para: pedido novo, cliente aceitou a alteração
-  // e cliente cancelou o pedido (o banco chama aqui nos três casos).
+  // cliente cancelou o pedido e reserva expirou (o banco chama aqui em todos).
   const num = p.numero ? ' Nº ' + p.numero : '';
-  const tipo = p.status === 'aceito' ? 'aceito' : p.status === 'cancelado' ? 'cancelado' : 'novo';
+  const tipo = p.status === 'aceito' ? 'aceito'
+    : p.status === 'cancelado' ? (p.cancel_motivo === 'expirado' ? 'expirado' : 'cancelado') : 'novo';
   const titulo = tipo === 'aceito' ? '✅ Cliente aceitou a alteração do pedido' + num
+    : tipo === 'expirado' ? '⏰ Reserva expirou — pedido' + num + ' cancelado'
     : tipo === 'cancelado' ? '❌ Cliente cancelou o pedido' + num
     : '🃏 Novo pedido' + num + ' na loja Pinta TCG';
   const explica = tipo === 'aceito' ? 'O cliente confirmou o pedido ajustado. Agora é só confirmar e separar as cartas na área de Pedidos.'
-    : tipo === 'cancelado' ? 'O cliente cancelou este pedido. O estoque não foi mexido.'
+    : tipo === 'expirado' ? 'O prazo da reserva terminou sem o pedido ser confirmado. Ele foi cancelado sozinho e as cartas voltaram para o estoque e para a loja.'
+    : tipo === 'cancelado' ? 'O cliente cancelou este pedido. As cartas reservadas voltaram para o estoque.'
     : 'Confira o estoque das cartas e confirme (ou altere) o pedido na área de Pedidos.';
 
   const html = `
@@ -86,6 +89,7 @@ export default async function handler(req, res) {
       <p style="margin:0;color:#4A4236">WhatsApp: ${esc(p.buyer_contact)}${p.pix_ref ? ' · Pix ref.: <b>' + esc(p.pix_ref) + '</b>' : ''}</p>
       ${p.buyer_note ? `<p style="margin:10px 0 0;font-style:italic;color:#4A4236">“${esc(p.buyer_note)}”</p>` : ''}
       <table style="width:100%;border-collapse:collapse;margin-top:14px;font-size:15px">${linhasItens}</table>
+      ${Number(p.desconto) > 0 ? `<p style="margin:10px 0 0;color:#4A4236;font-size:14px">🎟️ Cupom <b>${esc(p.cupom)}</b>: − ${BRL.format(Number(p.desconto))} (já descontado do total)</p>` : ''}
       ${blocoEntrega}
       <p style="margin:16px 0 0;font-size:20px;text-align:right">Total: <b style="color:#E8384F">${BRL.format(total)}</b></p>
       <p style="margin:18px 0 0">
