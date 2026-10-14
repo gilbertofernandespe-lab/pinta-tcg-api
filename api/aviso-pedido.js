@@ -89,7 +89,7 @@ export default async function handler(req, res) {
       <p style="margin:0;color:#4A4236">WhatsApp: ${esc(p.buyer_contact)}${p.pix_ref ? ' · Pix ref.: <b>' + esc(p.pix_ref) + '</b>' : ''}</p>
       ${p.buyer_note ? `<p style="margin:10px 0 0;font-style:italic;color:#4A4236">“${esc(p.buyer_note)}”</p>` : ''}
       <table style="width:100%;border-collapse:collapse;margin-top:14px;font-size:15px">${linhasItens}</table>
-      ${Number(p.desconto) > 0 ? `<p style="margin:10px 0 0;color:#4A4236;font-size:14px">🎟️ Cupom <b>${esc(p.cupom)}</b>: − ${BRL.format(Number(p.desconto))} (já descontado do total)</p>` : ''}
+      ${Number(p.desconto) > 0 ? `<p style="margin:10px 0 0;color:#4A4236;font-size:14px">${p.desc_prog_pct != null ? `🏷️ Desconto progressivo <b>${esc(String(Number(p.desc_prog_pct)).replace('.', ','))}%</b>` : `🎟️ Cupom <b>${esc(p.cupom)}</b>`}: − ${BRL.format(Number(p.desconto))} (já descontado do total)</p>` : ''}
       ${blocoEntrega}
       <p style="margin:16px 0 0;font-size:20px;text-align:right">Total: <b style="color:#E8384F">${BRL.format(total)}</b></p>
       <p style="margin:18px 0 0">
