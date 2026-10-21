@@ -40,7 +40,11 @@ function senhaTemporaria() {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // só o site da loja chama a administração
+  const origem = String(req.headers.origin || '');
+  const permitidas = /^https:\/\/(www\.)?pintatcg\.com\.br$|^https:\/\/pinta-tcg-colecao(-[a-z0-9-]+)?\.vercel\.app$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+  if (permitidas.test(origem)) res.setHeader('Access-Control-Allow-Origin', origem);
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Cache-Control', 'no-store');
