@@ -14,6 +14,7 @@
 // Coleções (sets) de Pokémon TCG — lista completa e cartas de cada uma
 // ---------------------------------------------------------------------
 const TCGDEX = 'https://api.tcgdex.net/v2';
+import { extrasDaColecao, extraPorId, buscarExtras } from './_promos-extra.js';
 
 async function pegarJSON(url) {
   try {
@@ -184,6 +185,8 @@ async function listarCartasDaColecao(setId) {
       image: img ? `${img}/high.webp` : null,
     });
   });
+  // promos novas que a TCGdex ainda não cadastrou
+  cartas.push(...extrasDaColecao(setId, vistos));
   return {
     colecao: {
       id: setId,
@@ -251,7 +254,11 @@ export default async function handler(req, res) {
     if (!/^[A-Za-z0-9._-]{1,60}$/.test(id)) { res.status(400).json({ error: 'Carta inválida.' }); return; }
     const c = await pegarJSON(`${TCGDEX}/en/cards/${encodeURIComponent(id)}`) ||
               await pegarJSON(`${TCGDEX}/ja/cards/${encodeURIComponent(id)}`);   // carta japonesa
-    if (!c) { res.status(404).json({ error: 'Carta não encontrada.' }); return; }
+    if (!c) {
+      const extra = extraPorId(id);   // promo nova que a TCGdex ainda não tem
+      if (extra) { res.status(200).json({ id, ...extra }); return; }
+      res.status(404).json({ error: 'Carta não encontrada.' }); return;
+    }
     res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
     res.status(200).json({ id, raridade: c.rarity || null, variantes: c.variants || null });
     return;
@@ -404,6 +411,12 @@ export default async function handler(req, res) {
         }
       }
 
+      // promos novas que a TCGdex ainda não cadastrou (só se não vieram dela)
+      const idsVindos = new Set(data.map((c) => c.id));
+      // (com "000/000" o número é de outra coleção: aí só vale pelo nome)
+      const extras = buscarExtras(textoNome, totalColecao ? null : localId).filter((c) => !idsVindos.has(c.id));
+      data = extras.concat(data);   // as mais novas primeiro
+
       // Id da coleção a partir do id da carta ("me02.5-238" → "me02.5")
       const setDaCarta = (c) => {
         if (c._setId) return c._setId;
@@ -432,7 +445,7 @@ export default async function handler(req, res) {
           set_id: setId || null,
           card_id: c.id || (setId && c.localId != null ? `${setId}-${c.localId}` : null),
           number: numeroPadrao(c.localId, info.total),
-          image: c.image ? `${c.image}/high.webp` : null,
+          image: c._imgPronta || (c.image ? `${c.image}/high.webp` : null),
           rarity: null,
           // 'ja' = carta de coleção japonesa (o site já marca o idioma Japonês)
           lang: info.lang || (/\/ja\//.test(String(c.image || '')) ? 'ja' : null),
