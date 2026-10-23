@@ -198,6 +198,55 @@ async function listarCartasDaColecao(setId) {
   };
 }
 
+// ?acao=pokemon&nome=Pikachu → TODAS as cartas desse Pokémon (inglês/português),
+// da coleção mais antiga para a mais nova. Usado em "Minhas coleções" do cliente.
+// "Mew" não traz "Mewtwo": o nome tem que aparecer como palavra inteira.
+async function cartasDoPokemon(nome) {
+  const limpo = String(nome || '').trim();
+  const q = encodeURIComponent(limpo);
+  const [en, pt, cols] = await Promise.all([
+    pegarJSON(`${TCGDEX}/en/cards?name=${q}`), pegarJSON(`${TCGDEX}/pt/cards?name=${q}`), listarColecoes(),
+  ]);
+  const info = {};
+  cols.colecoes.forEach((c, i) => { if (!/^ja/.test(String(c.serie))) info[c.id] = { ...c, pos: i }; });
+  const escapar = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('(^|[^a-z0-9])' + escapar(limpo.toLowerCase()) + '($|[^a-z0-9])', 'i');
+  const setDe = (c) => {
+    const id = String(c.id || '');
+    const suf = '-' + c.localId;
+    return id.endsWith(suf) ? id.slice(0, -suf.length) : id.slice(0, id.lastIndexOf('-'));
+  };
+  const porId = {};
+  (Array.isArray(en) ? en : []).forEach((c) => { porId[c.id] = { en: c }; });
+  (Array.isArray(pt) ? pt : []).forEach((c) => { porId[c.id] = { ...(porId[c.id] || {}), pt: c }; });
+  const cartas = [];
+  Object.values(porId).forEach(({ en: e, pt: p }) => {
+    const c = p || e;
+    const setId = setDe(c);
+    if (!info[setId]) return;                                    // Pocket / desconhecida
+    if (!re.test((e && e.name) || '') && !re.test((p && p.name) || '')) return;
+    const img = (p && p.image) || (e && e.image) || null;
+    cartas.push({
+      id: c.id, name: (p && p.name) || e.name, localId: c.localId, set_id: setId,
+      set_nome: info[setId].nome, number: numeroPadraoCarta(c.localId, info[setId].oficial),
+      thumb: img ? `${img}/low.webp` : null, image: img ? `${img}/high.webp` : null, _pos: info[setId].pos,
+    });
+  });
+  // promos novas que a TCGdex ainda não tem
+  buscarExtras(limpo, null).forEach((x) => {
+    if (porId[x.id] || !re.test(x.name) || !info[x._setId]) return;
+    cartas.push({
+      id: x.id, name: x.name, localId: x.localId, set_id: x._setId, set_nome: info[x._setId].nome,
+      number: x.localId, thumb: x._imgPronta ? x._imgPronta.replace(/\/large$/, '/medium') : null,
+      image: x._imgPronta, _pos: info[x._setId].pos,
+    });
+  });
+  const num = (t) => { const m = String(t).match(/\d+/); return m ? Number(m[0]) : 1e9; };
+  cartas.sort((a, b) => (b._pos - a._pos) || (num(a.localId) - num(b.localId)) || String(a.localId).localeCompare(String(b.localId)));
+  cartas.forEach((c) => { delete c._pos; });
+  return { nome: limpo, cartas };
+}
+
 // Coleção que só existe em japonês
 async function listarCartasDaColecaoJa(setId) {
   const ja = await pegarJSON(`${TCGDEX}/ja/sets/${encodeURIComponent(setId)}`);
@@ -243,6 +292,15 @@ export default async function handler(req, res) {
     if (!/^[A-Za-z0-9._-]{1,40}$/.test(setId)) { res.status(400).json({ error: 'Coleção inválida.' }); return; }
     const dados = await listarCartasDaColecao(setId);
     if (!dados) { res.status(404).json({ error: 'Coleção não encontrada.' }); return; }
+    res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+    res.status(200).json(dados);
+    return;
+  }
+
+  if (acao === 'pokemon') {
+    const nome = String(req.query.nome || '').trim();
+    if (nome.length < 2 || nome.length > 40) { res.status(400).json({ error: 'Nome inválido.' }); return; }
+    const dados = await cartasDoPokemon(nome);
     res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
     res.status(200).json(dados);
     return;
