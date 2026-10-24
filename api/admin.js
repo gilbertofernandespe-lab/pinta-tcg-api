@@ -181,6 +181,11 @@ export default async function handler(req, res) {
           ? String(c.imagem).replace(/\/high\.webp$/, '/low.png').replace(/\/low\.webp$/, '/low.png') : '',
       }));
 
+      // e-mail que o Resend aceita: sem ponto no começo/fim antes do @, sem
+      // ".." e só letras sem acento (ex.: "fulano.@gmail.com" é recusado e
+      // derrubava o envio de TODOS do mesmo lote)
+      const emailValido = (e) => /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/.test(e) && e.length <= 254;
+      const invalidos = [];
       let destinatarios;
       if (corpo.teste) {
         destinatarios = [{ nome: 'Teste', email: String(eu.email || '') }];
@@ -188,13 +193,16 @@ export default async function handler(req, res) {
         const rd = await fetch(`${sb}/rest/v1/clientes?avisos=eq.true&email=not.is.null&select=nome,email&limit=2000`, { headers: H });
         if (!rd.ok) { res.status(502).json({ error: 'Não deu para ler a lista de clientes (rodou o sql/2026-10-melhorias.sql?).' }); return; }
         const vistos = new Set();
-        destinatarios = (await json(rd)).filter((c) => {
-          const e = String(c.email || '').toLowerCase();
-          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) || vistos.has(e)) return false;
-          vistos.add(e); return true;
+        destinatarios = [];
+        (await json(rd)).forEach((c) => {
+          const e = String(c.email || '').trim().toLowerCase();
+          if (vistos.has(e)) return;
+          vistos.add(e);
+          if (emailValido(e)) destinatarios.push({ nome: c.nome, email: e });
+          else invalidos.push({ nome: c.nome, email: c.email });
         });
       }
-      if (!destinatarios.length) { res.status(200).json({ ok: true, enviados: 0, total: 0 }); return; }
+      if (!destinatarios.length) { res.status(200).json({ ok: true, enviados: 0, total: 0, invalidos }); return; }
 
       const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
       const esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -232,6 +240,23 @@ export default async function handler(req, res) {
           body: JSON.stringify(lote),
         });
         const d = await json(r);
+        if (!r.ok && /`to`|to field|email address/i.test(String(d.message || d.error || '')) && lote.length > 1) {
+          // um endereço ruim derruba o lote inteiro: manda um por um
+          for (const um of lote) {
+            const r1 = await fetch('https://api.resend.com/emails', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${chave}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(um),
+            });
+            if (r1.ok) enviados += 1;
+            else {
+              const d1 = await json(r1);
+              invalidos.push({ nome: (destinatarios.find((x) => x.email === um.to[0]) || {}).nome, email: um.to[0] });
+              falhas.push(String(d1.message || d1.error || ('erro ' + r1.status)));
+            }
+          }
+          continue;
+        }
         if (!r.ok) {
           const msg = String(d.message || d.error || ('erro ' + r.status));
           if (/domain|verify|testing emails|own email/i.test(msg)) {
@@ -246,8 +271,8 @@ export default async function handler(req, res) {
         }
         enviados += Array.isArray(d.data) ? d.data.length : lote.length;
       }
-      if (!enviados && falhas.length) { res.status(502).json({ error: 'O Resend recusou: ' + falhas[0] }); return; }
-      res.status(200).json({ ok: true, enviados, total: destinatarios.length, falhas: falhas.length });
+      if (!enviados && falhas.length) { res.status(502).json({ error: 'O Resend recusou: ' + falhas[0], invalidos }); return; }
+      res.status(200).json({ ok: true, enviados, total: destinatarios.length, falhas: falhas.length, invalidos });
       return;
     }
 
