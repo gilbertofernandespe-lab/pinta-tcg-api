@@ -11,6 +11,10 @@
 import { PintaPokedex } from './_pokedex.js';
 
 const SITE = 'https://www.pintatcg.com.br';
+// ---- contra excesso de e-mails ----
+const INTERVALO_DIAS = 3;     // no máximo 1 aviso automático a cada 3 dias por cliente
+const JANELA_DIAS = 7;        // cartas que chegaram nos últimos 7 dias (as que esperaram o intervalo entram no próximo)
+const MAX_EMAILS_RODADA = 40; // teto por rodada (o plano grátis do Resend manda 100 por dia)
 const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const semAcento = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
@@ -68,10 +72,12 @@ async function pegar(sb, H, caminho) {
 
 export async function rodarAvisos({ sb, H, chaveResend, remetente, desdeHoras }) {
   const inicio = new Date().toISOString();
-  const cfg = (await pegar(sb, H, 'loja_config?select=auto_aviso_em&limit=1'))[0] || {};
-  const desde = desdeHoras
-    ? new Date(Date.now() - desdeHoras * 3600 * 1000).toISOString()
-    : (cfg.auto_aviso_em || new Date(Date.now() - 24 * 3600 * 1000).toISOString());
+  const cfg = (await pegar(sb, H, 'loja_config?select=auto_aviso_em,auto_aviso_inicio&limit=1'))[0] || {};
+  // olha as cartas da última semana (nunca antes de os avisos serem ligados);
+  // quem já recebeu a carta não recebe de novo (avisos_enviados)
+  const janela = Date.now() - (desdeHoras ? desdeHoras * 3600 * 1000 : JANELA_DIAS * 86400 * 1000);
+  const inicioAvisos = cfg.auto_aviso_inicio ? Date.parse(cfg.auto_aviso_inicio) : Date.now();
+  const desde = new Date(Math.max(janela, inicioAvisos)).toISOString();
 
   // cartas que chegaram ou voltaram ao estoque desde a última vez
   const campos = 'id,name,number,set_id,set_name,image_url,price,language,variant,condition,created_at,reposto_em,tipo';
@@ -111,22 +117,33 @@ export async function rodarAvisos({ sb, H, chaveResend, remetente, desdeHoras })
   const lista = ids.map((x) => '"' + x + '"').join(',');
   const enviados = await pegar(sb, H, `avisos_enviados?select=customer_id,card_id&customer_id=in.(${lista})&limit=20000`);
   const ja = new Set(enviados.map((e) => e.customer_id + ':' + e.card_id));
-  const clientes = await pegar(sb, H, `clientes?select=user_id,nome,email&user_id=in.(${lista})`);
+  const clientes = await pegar(sb, H, `clientes?select=user_id,nome,email,avisos&user_id=in.(${lista})`);
+  // último aviso automático de cada um (no máximo 1 a cada INTERVALO_DIAS)
+  const ultimos = await pegar(sb, H, `avisos_enviados?select=customer_id,enviado_em&customer_id=in.(${lista})&order=enviado_em.desc&limit=20000`);
+  const ultimoPor = {};
+  ultimos.forEach((u) => { if (!ultimoPor[u.customer_id]) ultimoPor[u.customer_id] = Date.parse(u.enviado_em); });
+  const limiteIntervalo = Date.now() - INTERVALO_DIAS * 86400 * 1000;
   const cliPor = {};
   clientes.forEach((c) => { cliPor[c.user_id] = c; });
   const cartaPor = {};
   novas.forEach((c) => { cartaPor[c.id] = c; });
 
   const envios = [];
+  let adiados = 0;
   ids.forEach((cid) => {
     const cli = cliPor[cid];
     const email = String((cli && cli.email) || '').trim().toLowerCase();
     if (!cli || !emailValido(email)) return;
+    if (ultimoPor[cid] && ultimoPor[cid] > limiteIntervalo) { adiados += 1; return; }   // recebeu há pouco: espera
     const itens = Object.entries(porCliente[cid]).filter(([id]) => !ja.has(cid + ':' + id))
+      // favorito só avisa quem aceitou receber avisos da loja
+      .filter(([, motivo]) => motivo !== 'está nos seus favoritos' || cli.avisos === true)
       .map(([id, motivo]) => ({ c: cartaPor[id], motivo }));
     if (itens.length) envios.push({ cid, cli, email, itens });
   });
-  if (!envios.length) { await marcarRodada(); return { novas: novas.length, clientes: 0, emails: 0, cartas: 0 }; }
+  // teto por rodada: quem passar fica para a próxima (nada se perde)
+  if (envios.length > MAX_EMAILS_RODADA) { adiados += envios.length - MAX_EMAILS_RODADA; envios.length = MAX_EMAILS_RODADA; }
+  if (!envios.length) { await marcarRodada(); return { novas: novas.length, clientes: 0, emails: 0, cartas: 0, adiados }; }
   if (!chaveResend) throw new Error('Falta a RESEND_API_KEY na Vercel (projeto pinta-tcg-api).');
 
   const montar = (e) => {
@@ -156,6 +173,7 @@ export async function rodarAvisos({ sb, H, chaveResend, remetente, desdeHoras })
         ${n > mostrar.length ? `<p style="font-size:13px;color:#6E6454">…e mais ${n - mostrar.length}.</p>` : ''}
         <p style="margin:18px 0 0;text-align:center"><a href="${SITE}/minha-colecao.html" style="background:#E8384F;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block">Ver na loja</a></p>
         <p style="margin:22px 0 0;font-size:11px;color:#6E6454;line-height:1.5">Você recebe este aviso porque montou uma coleção, pediu aviso ou favoritou cartas na Pinta TCG.
+          Mandamos no máximo um aviso destes a cada ${INTERVALO_DIAS} dias.
           Para não receber mais, desmarque “Quero que a loja me avise” em <a href="${SITE}/minha-colecao.html" style="color:#6E6454">Minhas coleções</a>, apague o pedido de aviso em <a href="${SITE}/conta.html" style="color:#6E6454">Minha conta</a> ou responda pedindo para sair.</p>
       </div></div>`;
     return { from: remetente, to: [e.email], subject: assunto, html };
@@ -180,5 +198,5 @@ export async function rodarAvisos({ sb, H, chaveResend, remetente, desdeHoras })
     });
   }
   await marcarRodada();
-  return { novas: novas.length, clientes: envios.length, emails, cartas: cartasAvisadas, falhas };
+  return { novas: novas.length, clientes: envios.length, emails, cartas: cartasAvisadas, falhas, adiados, intervaloDias: INTERVALO_DIAS };
 }
