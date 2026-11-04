@@ -110,6 +110,9 @@ export async function rodarAvisos({ sb, H, chaveResend, remetente, desdeHoras })
       }
     });
   });
+  // a conta da loja não recebe aviso das próprias cartas
+  const lojistas = new Set((await pegar(sb, H, 'lojistas?select=user_id').catch(() => [])).map((l) => l.user_id));
+  lojistas.forEach((id) => { delete porCliente[id]; });
   const ids = Object.keys(porCliente);
   if (!ids.length) { await marcarRodada(); return { novas: novas.length, clientes: 0, emails: 0, cartas: 0 }; }
 
