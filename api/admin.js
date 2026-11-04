@@ -15,6 +15,8 @@
 //   AVISO_REMETENTE            — ex.: 'Pinta TCG <loja@pintatcg.com.br>' (precisa de domínio
 //                                verificado no Resend para mandar e-mail aos clientes)
 
+import { rodarAvisos } from './_avisos.js';
+
 const env = (k) => String(process.env[k] || '').trim();
 
 function cabecalhosAdmin() {
@@ -164,6 +166,17 @@ export default async function handler(req, res) {
     }
 
     // ---------- avisar clientes por e-mail: chegaram cartas novas ----------
+    // ---------- avisos automáticos (cartas que os clientes procuram) ----------
+    if (acao === 'avisos_auto') {
+      const r = await rodarAvisos({
+        sb, H, chaveResend: env('RESEND_API_KEY'),
+        remetente: env('AVISO_REMETENTE') || 'Pinta TCG <onboarding@resend.dev>',
+        desdeHoras: Number(corpo.desdeHoras) > 0 ? Math.min(24 * 30, Number(corpo.desdeHoras)) : null,
+      });
+      res.status(200).json({ ok: true, ...r });
+      return;
+    }
+
     if (acao === 'novidades_email') {
       const chave = env('RESEND_API_KEY');
       if (!chave) { res.status(500).json({ error: 'Falta a RESEND_API_KEY na Vercel (projeto pinta-tcg-api).' }); return; }
