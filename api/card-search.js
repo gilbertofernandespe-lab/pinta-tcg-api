@@ -14,7 +14,7 @@
 // Coleções (sets) de Pokémon TCG — lista completa e cartas de cada uma
 // ---------------------------------------------------------------------
 const TCGDEX = 'https://api.tcgdex.net/v2';
-import { extrasDaColecao, extraPorId, buscarExtras } from './_promos-extra.js';
+import { extrasDaColecao, extraPorId, buscarExtras, colecoesManuais, colecaoManual, infoManual } from './_promos-extra.js';
 
 async function pegarJSON(url) {
   try {
@@ -140,6 +140,12 @@ async function listarColecoes() {
       simbolo: s.symbol ? `${s.symbol}.webp` : null,
     }));
 
+  // coleções que já saíram mas a TCGdex ainda não tem (ex.: Reinado Delta): no topo da série
+  colecoesManuais(new Set(colecoes.map((c) => c.id))).forEach((m) => {
+    const i = colecoes.findIndex((c) => c.serie === m.serie);
+    colecoes.splice(i < 0 ? 0 : i, 0, m);
+  });
+
   const usadas = new Set(colecoes.map((c) => c.serie));
   const series = listaSeries
     .filter((s) => usadas.has(s.id))
@@ -165,7 +171,7 @@ async function listarCartasDaColecao(setId) {
     pegarJSON(`${TCGDEX}/pt/sets/${encodeURIComponent(setId)}`),
     pegarJSON(`${TCGDEX}/en/sets/${encodeURIComponent(setId)}`),
   ]);
-  if (!en && !pt) return listarCartasDaColecaoJa(setId);
+  if (!en && !pt) return colecaoManual(setId) || listarCartasDaColecaoJa(setId);
   const base = en || pt;
   const oficial = (base.cardCount && base.cardCount.official) || (pt && pt.cardCount && pt.cardCount.official) || null;
   const ptPorId = {};
@@ -378,6 +384,7 @@ export default async function handler(req, res) {
         infoSet[s.id] = { ...(infoSet[s.id] || {}), nome: s.name };
         if (!infoSet[s.id].total) infoSet[s.id].total = s.cardCount?.official;
       }
+      for (const id of ['me06']) if (!infoSet[id] && infoManual(id)) infoSet[id] = infoManual(id);
 
       // Mesmo número escrito de jeitos diferentes (25 = 025) conta como igual
       const mesmoNumero = (a, b) =>
@@ -472,7 +479,7 @@ export default async function handler(req, res) {
       // promos novas que a TCGdex ainda não cadastrou (só se não vieram dela)
       const idsVindos = new Set(data.map((c) => c.id));
       // (com "000/000" o número é de outra coleção: aí só vale pelo nome)
-      const extras = buscarExtras(textoNome, totalColecao ? null : localId).filter((c) => !idsVindos.has(c.id));
+      const extras = buscarExtras(textoNome, localId, totalColecao).filter((c) => !idsVindos.has(c.id));
       data = extras.concat(data);   // as mais novas primeiro
 
       // Id da coleção a partir do id da carta ("me02.5-238" → "me02.5")
